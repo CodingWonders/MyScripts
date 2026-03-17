@@ -126,10 +126,10 @@ function Get-ComputerInventory {
     }
 
     # this information is recorded by winutil when it creates the ISO
-    if (Test-Path "HKLM:\SOFTWARE\WinUtil") {
+    if (Test-Path "HKLM:\SOFTWARE\MicroWin") {
         $sinv += "`nMicroWin installation medium information:"
-        $sinv += "`n    - Created with WinUtil version: $(Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\WinUtil" -Name "ToolboxVersion")"
-        $sinv += "`n    - Build Date: $(Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\WinUtil" -Name "MicroWinBuildDate")"
+        $sinv += "`n    - Created with WinUtil version: $(Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\MicroWin" -Name "ToolboxVersion")"
+        $sinv += "`n    - Build Date: $(Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\MicroWin" -Name "MicroWinBuildDate")"
     }
 
     $inv = "$($hinv)`n`n$($sinv)"
