@@ -31,8 +31,12 @@ param (
 
     [Parameter(ParameterSetName='FileCertByThumbprint', Mandatory)]
     [Parameter(ParameterSetName='DirectoryCertByThumbprint', Mandatory)]
-    [string] $certificateThumbprint
+    [string] $certificateThumbprint,
+    
+    [ValidateSet('','sha256','sha384','sha512')]
+    [string] $thumbprintPrefix = ""
 )
+
 
 function Invoke-RdpFileSigning {
     param (
@@ -50,6 +54,70 @@ function Invoke-RdpFileSigning {
 
     rdpsign.exe /sha256 $rdpCertThumb "$rdpFilePath"
     return $?
+}
+
+# July 2026 cumulative updates allow specifying SHA256, SHA384 and SHA512 thumbprints, which are more secure than SHA1. Detect
+# if we're on those supported platforms
+# --------------------
+# Hold the UBRs for all supported systems
+$UBR_WIN11_BR_SHAUPD = 2525
+$UBR_WIN11_GE_SHAUPD = 8875
+$UBR_WS2025_SHAUPD = 33158
+$UBR_WS2022_SHAUPD = 5386
+$UBR_WS2019_SHAUPD = 9020
+$UBR_WS2016_SHAUPD = 9339
+$UBR_WIN10_VB_SHAUPD = 7548
+
+$shaUpdateSupported = $false
+$sysBuild = [int](Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "CurrentBuildNumber")
+$sysUBR = Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "UBR"
+# sysIsServer only for Windows 11 24H2, and Server 2025
+$sysIsServer = (Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "InstallationType") -like "*Server*"
+
+# If we're running anything greater than 28000 then we automatically mark it as compatible with the SHA update
+$shaUpdateSupported = $sysBuild -gt 28000
+
+if (-not $shaUpdateSupported) {
+    switch -Wildcard ($sysBuild) {
+        28000 {
+            # Windows 11 26H1 (Bromine)
+            $shaUpdateSupported = $sysUBR -ge $UBR_WIN11_BR_SHAUPD
+        }
+        26300 {
+            # Windows 11 26H2; already supported
+            $shaUpdateSupported = $true
+        }
+        26200 {
+            # Windows 11 25H2
+            $shaUpdateSupported = $sysUBR -ge $UBR_WIN11_GE_SHAUPD
+        }
+        26100 {
+            # Windows 11 24H2; Windows Server 2025. We have to check
+            $ubrLowerThreshold = 0
+            if ($sysIsServer) {
+                $ubrLowerThreshold = $UBR_WS2025_SHAUPD
+            } else {
+                $ubrLowerThreshold = $UBR_WIN11_GE_SHAUPD
+            }
+            $shaUpdateSupported = $sysUBR -ge $ubrLowerThreshold
+        }
+        20348 {
+            # Windows Server 2022
+            $shaUpdateSupported = $sysUBR -ge $UBR_WS2022_SHAUPD
+        }
+        {($_ -eq 19044) -or ($_ -eq 19045)} {
+            # Windows 10 IoT LTSC 2021; Windows 10 22H2 (+ ESU)
+            $shaUpdateSupported = $sysUBR -ge $UBR_WIN10_VB_SHAUPD
+        }
+        17063 {
+            # Windows 10 1809; Windows Server 2019
+            $shaUpdateSupported = $sysUBR -ge $UBR_WS2019_SHAUPD
+        }
+        14393 {
+            # Windows 10 1607; Windows Server 2016
+            $shaUpdateSupported = $sysUBR -ge $UBR_WS2016_SHAUPD
+        }
+    }
 }
 
 # Look at certificate modes: whether we need to create a new self-signed cert, or if we use an existing cert by
@@ -71,10 +139,19 @@ if ($certificateSubject) {
             Remove-Item -Path "\rootcert.cer" -Force
         }
         Write-Host -NoNewline "`nIMPORTANT! You must add this certificate's thumbprint, "
-        Write-Host -NoNewline $($cert.Thumbprint) -BackgroundColor DarkGreen -ForegroundColor White
+        if (($shaUpdateSupported) -and ($thumbprintPrefix -ne "")) {
+            Write-Host -NoNewline "including the prefix, "
+            Write-Host -NoNewline "$($thumbprintPrefix):$($cert.GetCertHashString("$thumbprintPrefix"))" -BackgroundColor DarkGreen -ForegroundColor White
+        } else {
+            Write-Host -NoNewline $($cert.Thumbprint) -BackgroundColor DarkGreen -ForegroundColor White
+        }
         Write-Host ", to the following Group Policy Object:"
         Write-Host "    Computer Configuration\Administrative Templates\Windows Components\Remote Desktop Services\Remote Desktop Connection Client"
-        Write-Host "Add this thumbprint to the `"Specify SHA1 thumbprints of certificates representing trusted .rdp publishers`" policy. Enable"
+        if ($shaUpdateSupported) {
+            Write-Host "Add this thumbprint to the `"Specify thumbprints of certificates representing trusted .rdp publishers`" policy. Enable"
+        } else {
+            Write-Host "Add this thumbprint to the `"Specify SHA1 thumbprints of certificates representing trusted .rdp publishers`" policy. Enable"
+        }
         Write-Host "said policy if not already enabled.`n"
     }
 } elseif ($sourceCertificate) {
